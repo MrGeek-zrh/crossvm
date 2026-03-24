@@ -21,6 +21,10 @@ use resources::SystemAllocator;
 use snapshot::AnySnapshot;
 use sync::Mutex;
 use thiserror::Error;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::ProtectedVmPtdevMmioMetadata;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::VmX86_64;
 use vm_control::api::VmMemoryClient;
 
 use super::PciId;
@@ -371,6 +375,16 @@ pub trait PciDevice: Send + Suspendable {
     /// Register any capabilties specified by the device.
     fn register_device_capabilities(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Returns protected-VM passthrough MMIO metadata derived from this device's finalized BAR
+    /// layout, if any.
+    fn get_protected_vm_ptdev_mmio_metadata(
+        &self,
+        _vm: &dyn VmX86_64,
+    ) -> anyhow::Result<Option<ProtectedVmPtdevMmioMetadata>> {
+        Ok(None)
     }
 
     /// Gets a reference to the API client for sending VmMemoryRequest. Any devices that uses

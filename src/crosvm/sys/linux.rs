@@ -940,6 +940,7 @@ fn create_devices(
             let (dev, jail, viommu_mapper) = create_vfio_device(
                 cfg.jail_config.as_ref(),
                 vm,
+                cfg.protection_type,
                 resources,
                 add_control_tube,
                 &vfio_dev.path,
@@ -2601,6 +2602,7 @@ fn add_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
             let (vfio_device, jail, viommu_mapper) = create_vfio_device(
                 cfg.jail_config.as_ref(),
                 &linux.vm,
+                cfg.protection_type,
                 sys_allocator,
                 add_control_tube,
                 &device.path,

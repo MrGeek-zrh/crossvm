@@ -1041,6 +1041,8 @@ impl arch::LinuxArch for X8664arch {
             .map(|(dev, jail_orig)| (dev.into_pci_device().unwrap(), jail_orig))
             .collect();
 
+        let use_pcie_cfg_mmio = !components.protection_type.isolates_memory();
+
         let (pci, pci_irqs, mut pid_debug_label_map, amls, gpe_scope_amls) =
             arch::generate_pci_root(
                 pci_devices,
@@ -1059,7 +1061,9 @@ impl arch::LinuxArch for X8664arch {
             .map_err(Error::CreatePciRoot)?;
 
         let pci = Arc::new(Mutex::new(pci));
-        pci.lock().enable_pcie_cfg_mmio(pcie_cfg_mmio_range.start);
+        if use_pcie_cfg_mmio {
+            pci.lock().enable_pcie_cfg_mmio(pcie_cfg_mmio_range.start);
+        }
         let pci_cfg = PciConfigIo::new(
             pci.clone(),
             components.break_linux_pci_config_io,
@@ -1068,11 +1072,13 @@ impl arch::LinuxArch for X8664arch {
         let pci_bus = Arc::new(Mutex::new(pci_cfg));
         io_bus.insert(pci_bus, 0xcf8, 0x8).unwrap();
 
-        let pcie_cfg_mmio = Arc::new(Mutex::new(PciConfigMmio::new(pci.clone(), 12)));
         let pcie_cfg_mmio_len = pcie_cfg_mmio_range.len().unwrap();
-        mmio_bus
-            .insert(pcie_cfg_mmio, pcie_cfg_mmio_range.start, pcie_cfg_mmio_len)
-            .unwrap();
+        if use_pcie_cfg_mmio {
+            let pcie_cfg_mmio = Arc::new(Mutex::new(PciConfigMmio::new(pci.clone(), 12)));
+            mmio_bus
+                .insert(pcie_cfg_mmio, pcie_cfg_mmio_range.start, pcie_cfg_mmio_len)
+                .unwrap();
+        }
 
         let pcie_vcfg_mmio = Arc::new(Mutex::new(PciVirtualConfigMmio::new(pci.clone(), 13)));
         mmio_bus
@@ -1258,7 +1264,7 @@ impl arch::LinuxArch for X8664arch {
             host_cpus,
             vcpu_ids,
             &pci_irqs,
-            pcie_cfg_mmio_range.start,
+            use_pcie_cfg_mmio.then_some(pcie_cfg_mmio_range.start),
             max_bus,
             components.force_s2idle,
         )

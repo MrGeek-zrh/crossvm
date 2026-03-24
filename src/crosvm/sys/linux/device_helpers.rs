@@ -1650,6 +1650,7 @@ pub enum VfioDeviceVariant {
 pub fn create_vfio_device(
     jail_config: Option<&JailConfig>,
     vm: &impl Vm,
+    protection_type: ProtectionType,
     resources: &mut SystemAllocator,
     add_control_tube: &mut impl FnMut(AnyControlTube),
     vfio_path: &Path,
@@ -1702,6 +1703,7 @@ pub fn create_vfio_device(
                 vfio_device_tube_msix,
                 VmMemoryClient::new(vfio_device_tube_mem),
                 vfio_device_tube_vm,
+                protection_type.isolates_memory() && !hotplug,
             )?;
             // early reservation for pass-through PCI devices.
             let endpoint_addr = vfio_pci_device

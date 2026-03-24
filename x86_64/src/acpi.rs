@@ -531,8 +531,9 @@ fn sync_acpi_id_from_cpuid(
 /// * `apic_ids` - The apic id for vCPU will be sent to KVM by KVM_CREATE_VCPU ioctl.
 /// * `pci_rqs` - PCI device to IRQ number assignments as returned by `arch::generate_pci_root()`
 ///   (device address, IRQ number, and PCI interrupt pin assignment).
-/// * `pcie_cfg_mmio` - Base address for the pcie enhanced configuration access mechanism
-/// * `max_bus` - Max bus number in MCFG table
+/// * `pcie_cfg_mmio` - Base address for the pcie enhanced configuration access mechanism if ECAM
+///   should be advertised to the guest
+/// * `max_bus` - Max bus number in MCFG table when ECAM is advertised
 pub fn create_acpi_tables(
     guest_mem: &GuestMemory,
     num_cpus: u8,
@@ -543,7 +544,7 @@ pub fn create_acpi_tables(
     host_cpus: Option<VcpuAffinity>,
     apic_ids: &mut Vec<usize>,
     pci_irqs: &[(PciAddress, u32, PciInterruptPin)],
-    pcie_cfg_mmio: u64,
+    pcie_cfg_mmio: Option<u64>,
     max_bus: u8,
     force_s2idle: bool,
 ) -> Option<GuestAddress> {
@@ -699,22 +700,23 @@ pub fn create_acpi_tables(
     tables.push(offset.0);
     offset = next_offset(offset, madt.len() as u64)?;
 
-    // MCFG
-    let mut mcfg = SDT::new(
-        *b"MCFG",
-        MCFG_LEN,
-        MCFG_REVISION,
-        *b"CROSVM",
-        *b"CROSVMDT",
-        OEM_REVISION,
-    );
-    mcfg.write(MCFG_FIELD_BASE_ADDRESS, pcie_cfg_mmio);
-    mcfg.write(MCFG_FIELD_START_BUS_NUMBER, 0_u8);
-    mcfg.write(MCFG_FIELD_END_BUS_NUMBER, max_bus);
+    if let Some(pcie_cfg_mmio) = pcie_cfg_mmio {
+        let mut mcfg = SDT::new(
+            *b"MCFG",
+            MCFG_LEN,
+            MCFG_REVISION,
+            *b"CROSVM",
+            *b"CROSVMDT",
+            OEM_REVISION,
+        );
+        mcfg.write(MCFG_FIELD_BASE_ADDRESS, pcie_cfg_mmio);
+        mcfg.write(MCFG_FIELD_START_BUS_NUMBER, 0_u8);
+        mcfg.write(MCFG_FIELD_END_BUS_NUMBER, max_bus);
 
-    guest_mem.write_at_addr(mcfg.as_slice(), offset).ok()?;
-    tables.push(offset.0);
-    offset = next_offset(offset, madt.len() as u64)?;
+        guest_mem.write_at_addr(mcfg.as_slice(), offset).ok()?;
+        tables.push(offset.0);
+        offset = next_offset(offset, madt.len() as u64)?;
+    }
 
     // XSDT
     let mut xsdt = SDT::new(

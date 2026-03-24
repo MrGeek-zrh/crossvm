@@ -11,10 +11,19 @@ use std::process::Command;
 
 use rayon::prelude::*;
 
+/// Skip macOS AppleDouble/resource-fork files (._*).
+fn is_apple_double_file(name: &OsStr) -> bool {
+    name.to_str().map(|s| s.starts_with("._")).unwrap_or(false)
+}
+
 fn rewrite_policies(seccomp_policy_path: &Path, rewrote_policy_folder: &Path) {
     for entry in fs::read_dir(seccomp_policy_path).unwrap() {
         let policy_file = entry.unwrap();
-        let policy_file_content = fs::read_to_string(policy_file.path()).unwrap();
+        if is_apple_double_file(policy_file.file_name().as_os_str()) {
+            continue;
+        }
+        let raw = fs::read(policy_file.path()).unwrap();
+        let policy_file_content = String::from_utf8_lossy(&raw).into_owned();
         let policy_file_content_rewrote =
             policy_file_content.replace("/usr/share/policy/crosvm", ".");
         fs::write(
@@ -72,6 +81,7 @@ fn compile_policies(out_dir: &Path, rewrote_policy_folder: &Path, compile_seccom
 
     let s = entries
         .par_iter()
+        .filter(|ent| !is_apple_double_file(ent.file_name().as_os_str()))
         .filter(|ent| ent.path().extension() == Some(OsStr::new("policy")))
         .map(|policy_file| {
             compile_policy(

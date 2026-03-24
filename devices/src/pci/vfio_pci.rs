@@ -13,6 +13,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use acpi_tables::aml::Aml;
+use anyhow::bail;
+use anyhow::Context;
 use base::debug;
 use base::error;
 use base::pagesize;
@@ -27,6 +29,12 @@ use base::RawDescriptor;
 use base::Tube;
 use base::WaitContext;
 use base::WorkerThread;
+use hypervisor::ProtectedVmPtdevMmioMetadata;
+use hypervisor::ProtectedVmPtdevMmioRange;
+use hypervisor::PROTECTED_VM_PTDEV_MMIO_KIND_DIRECT_BAR;
+use hypervisor::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::VmX86_64;
 use hypervisor::MemCacheType;
 use resources::AddressRange;
 use resources::Alloc;
@@ -683,6 +691,7 @@ pub struct VfioPciDevice {
     ext_caps: Vec<ExtCap>,
     vcfg_shm_mmap: Option<MemoryMapping>,
     mapped_mmio_bars: BTreeMap<PciBarIndex, (u64, Vec<VmMemoryRegionId>)>,
+    submit_ptdev_mmio_metadata: bool,
     activated: bool,
     acpi_notifier_val: Arc<Mutex<Vec<u32>>>,
     gpe: Option<u32>,
@@ -701,6 +710,7 @@ impl VfioPciDevice {
         vfio_device_socket_msix: Tube,
         vm_memory_client: VmMemoryClient,
         vfio_device_socket_vm: Tube,
+        submit_ptdev_mmio_metadata: bool,
     ) -> Result<Self, PciDeviceError> {
         let preferred_address = if let Some(bus_num) = hotplug_bus_number {
             debug!("hotplug bus {}", bus_num);
@@ -851,6 +861,7 @@ impl VfioPciDevice {
             ext_caps,
             vcfg_shm_mmap: None,
             mapped_mmio_bars: BTreeMap::new(),
+            submit_ptdev_mmio_metadata,
             activated: false,
             acpi_notifier_val: Arc::new(Mutex::new(Vec::new())),
             gpe: None,
@@ -1196,6 +1207,72 @@ impl VfioPciDevice {
         }
 
         mmaps_ids
+    }
+
+    fn build_protected_vm_ptdev_mmio_metadata(
+        &self,
+    ) -> anyhow::Result<Option<ProtectedVmPtdevMmioMetadata>> {
+        if !self.submit_ptdev_mmio_metadata {
+            return Ok(None);
+        }
+
+        let host_pci_addr =
+            PciAddress::from_path(&self.sysfs_path).context("failed to parse host PCI address")?;
+        let host_bdf = host_pci_addr.to_u32() as u16;
+        let mut ranges = Vec::new();
+
+        for mmio_info in &self.mmio_regions {
+            let bar_index = mmio_info.bar_index();
+            if bar_index >= VFIO_PCI_ROM_REGION_INDEX as usize {
+                continue;
+            }
+
+            let bar_addr = mmio_info.address();
+            if bar_addr == 0 {
+                continue;
+            }
+
+            if self.device.get_region_flags(bar_index) & VFIO_REGION_INFO_FLAG_MMAP == 0 {
+                continue;
+            }
+
+            let mut mmaps = self.device.get_region_mmap(bar_index);
+            if self.msix_cap.is_some() {
+                mmaps = self.remove_bar_mmap_msix(bar_index, mmaps);
+            }
+
+            for mmap in mmaps {
+                ranges.push(ProtectedVmPtdevMmioRange {
+                    segment: 0,
+                    bdf: host_bdf,
+                    pasid: 0,
+                    bar_index: u8::try_from(bar_index).context("BAR index overflow")?,
+                    bar_offset: mmap.offset,
+                    guest_gpa: bar_addr + mmap.offset,
+                    size: mmap.size,
+                    kind: PROTECTED_VM_PTDEV_MMIO_KIND_DIRECT_BAR,
+                    flags: 0,
+                });
+            }
+        }
+
+        if ranges.is_empty() {
+            return Ok(None);
+        }
+
+        if ranges.len() > PROTECTED_VM_PTDEV_MMIO_MAX_RANGES {
+            bail!(
+                "too many ptdev MMIO ranges: {} > {}",
+                ranges.len(),
+                PROTECTED_VM_PTDEV_MMIO_MAX_RANGES
+            );
+        }
+
+        Ok(Some(ProtectedVmPtdevMmioMetadata {
+            generation: 1,
+            flags: 0,
+            ranges,
+        }))
     }
 
     fn remove_bar_mmap(&self, mmap_ids: &[VmMemoryRegionId]) {
@@ -1790,6 +1867,14 @@ impl PciDevice for VfioPciDevice {
 
     fn register_device_capabilities(&mut self) -> Result<(), PciDeviceError> {
         Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn get_protected_vm_ptdev_mmio_metadata(
+        &self,
+        _vm: &dyn VmX86_64,
+    ) -> anyhow::Result<Option<ProtectedVmPtdevMmioMetadata>> {
+        self.build_protected_vm_ptdev_mmio_metadata()
     }
 
     fn read_config_register(&self, reg_idx: usize) -> u32 {

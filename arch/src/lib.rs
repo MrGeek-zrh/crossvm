@@ -745,9 +745,17 @@ pub enum DeviceRegistrationError {
     /// Failed to register irq event with VM.
     #[error("failed to register irq event to VM: {0}")]
     RegisterIrqfd(base::Error),
+    #[cfg(target_arch = "x86_64")]
+    /// Failed to derive protected-VM passthrough MMIO metadata from a PCI device.
+    #[error("failed to derive protected VM ptdev MMIO metadata: {0}")]
+    RegisterProtectedVmPtdevMmioMetadata(anyhow::Error),
     /// Could not setup VFIO platform IRQ for the device.
     #[error("Setting up VFIO platform IRQ: {0}")]
     SetupVfioPlatformIrq(anyhow::Error),
+    #[cfg(target_arch = "x86_64")]
+    /// Failed to submit protected-VM passthrough MMIO metadata to the hypervisor.
+    #[error("failed to submit protected VM ptdev MMIO metadata: {0}")]
+    SubmitProtectedVmPtdevMmioMetadata(base::Error),
 }
 
 /// Config a PCI device for used by this vm.
@@ -773,6 +781,17 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     let device_ranges = device
         .allocate_device_bars(resources)
         .map_err(DeviceRegistrationError::AllocateDeviceAddrs)?;
+
+    #[cfg(target_arch = "x86_64")]
+    if let Some(metadata) = device
+        .get_protected_vm_ptdev_mmio_metadata(&linux.vm)
+        .map_err(DeviceRegistrationError::RegisterProtectedVmPtdevMmioMetadata)?
+    {
+        linux
+            .vm
+            .set_protected_vm_ptdev_mmio_metadata(&metadata)
+            .map_err(DeviceRegistrationError::SubmitProtectedVmPtdevMmioMetadata)?;
+    }
 
     // If device is a pcie bridge, add its pci bus to pci root
     if let Some(pci_bus) = device.get_new_pci_bus() {

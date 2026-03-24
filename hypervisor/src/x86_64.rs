@@ -30,6 +30,29 @@ use crate::IrqSourceChip;
 use crate::Vcpu;
 use crate::Vm;
 
+pub const PROTECTED_VM_PTDEV_MMIO_MAX_RANGES: usize = 16;
+pub const PROTECTED_VM_PTDEV_MMIO_KIND_DIRECT_BAR: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtectedVmPtdevMmioRange {
+    pub segment: u16,
+    pub bdf: u16,
+    pub pasid: u32,
+    pub bar_index: u8,
+    pub bar_offset: u64,
+    pub guest_gpa: u64,
+    pub size: u64,
+    pub kind: u32,
+    pub flags: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProtectedVmPtdevMmioMetadata {
+    pub generation: u16,
+    pub flags: u64,
+    pub ranges: Vec<ProtectedVmPtdevMmioRange>,
+}
+
 const MSR_F15H_PERF_CTL0: u32 = 0xc0010200;
 const MSR_F15H_PERF_CTL1: u32 = 0xc0010202;
 const MSR_F15H_PERF_CTL2: u32 = 0xc0010204;
@@ -72,6 +95,14 @@ pub trait VmX86_64: Vm {
     /// Only works on protected VMs (i.e. those with vm_type == KVM_X86_PKVM_PROTECTED_VM).
     fn load_protected_vm_firmware(&mut self, fw_addr: GuestAddress, fw_max_size: u64)
         -> Result<()>;
+
+    /// Submit passthrough-device MMIO metadata for protected pVM BAR allowlisting.
+    fn set_protected_vm_ptdev_mmio_metadata(
+        &self,
+        _metadata: &ProtectedVmPtdevMmioMetadata,
+    ) -> Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported).into())
+    }
 }
 
 /// A wrapper around creating and using a VCPU on x86_64.

@@ -288,9 +288,11 @@ impl PciRoot {
     {
         // Ignore attempt to replace PCI Root host bridge.
         if !address.is_root() {
-            self.pci_mmio_state
-                .setup_mapping(&address, device.lock().deref_mut(), mapper)
-                .map_err(Error::MmioSetup)?;
+            if self.pcie_cfg_mmio.is_some() {
+                self.pci_mmio_state
+                    .setup_mapping(&address, device.lock().deref_mut(), mapper)
+                    .map_err(Error::MmioSetup)?;
+            }
             self.devices.insert(address, device);
             self.sync_multifunction_bit_to_mmio_mappings(&address, true);
         }

@@ -56,9 +56,12 @@ use crate::PicState;
 use crate::PitChannelState;
 use crate::PitState;
 use crate::ProtectionType;
+use crate::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
 use crate::Regs;
 use crate::Segment;
 use crate::Sregs;
+use crate::ProtectedVmPtdevMmioMetadata;
+use crate::ProtectedVmPtdevMmioRange;
 use crate::VcpuExit;
 use crate::VcpuX86_64;
 use crate::VmCap;
@@ -69,6 +72,7 @@ use crate::NUM_IOAPIC_PINS;
 type KvmCpuId = FlexibleArrayWrapper<kvm_cpuid2, kvm_cpuid_entry2>;
 const KVM_XSAVE_MAX_SIZE: usize = 4096;
 const MSR_IA32_APICBASE: u32 = 0x0000001b;
+const KVM_CAP_X86_PROTECTED_VM_FLAGS_SET_PTDEV_MMIO_METADATA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VcpuEvents {
@@ -485,12 +489,96 @@ impl KvmVm {
             )
         }
     }
+
+    fn set_protected_vm_ptdev_mmio_metadata(
+        &self,
+        metadata: &ProtectedVmPtdevMmioMetadata,
+    ) -> Result<()> {
+        if metadata.ranges.is_empty() {
+            return Err(Error::new(EINVAL));
+        }
+
+        if metadata.ranges.len() > PROTECTED_VM_PTDEV_MMIO_MAX_RANGES {
+            return Err(Error::new(E2BIG));
+        }
+
+        let kvm_ranges = metadata
+            .ranges
+            .iter()
+            .map(KvmProtectedVmPtdevMmioRange::try_from)
+            .collect::<Result<Vec<_>>>()?;
+
+        let kvm_metadata = KvmProtectedVmPtdevMmioMetadata {
+            nr_ranges: kvm_ranges.len() as u32,
+            generation: metadata.generation,
+            reserved16: 0,
+            flags: metadata.flags,
+            ranges: kvm_ranges.as_ptr() as u64,
+            reserved: [0; 4],
+        };
+
+        // SAFETY:
+        // Safe because `kvm_metadata` and `kvm_ranges` are stack-owned by this function and remain
+        // alive for the duration of the ioctl. KVM only reads them synchronously.
+        unsafe {
+            self.enable_raw_capability(
+                KvmCap::X86ProtectedVm,
+                KVM_CAP_X86_PROTECTED_VM_FLAGS_SET_PTDEV_MMIO_METADATA,
+                &[&kvm_metadata as *const KvmProtectedVmPtdevMmioMetadata as u64, 0, 0, 0],
+            )
+        }
+    }
 }
 
 #[repr(C)]
 struct KvmProtectedVmInfo {
     firmware_size: u64,
     reserved: [u64; 7],
+}
+
+#[repr(C)]
+struct KvmProtectedVmPtdevMmioRange {
+    segment: u16,
+    bdf: u16,
+    pasid: u32,
+    bar_index: u8,
+    reserved8: [u8; 3],
+    bar_offset: u64,
+    guest_gpa: u64,
+    size: u64,
+    kind: u32,
+    flags: u32,
+    reserved: [u64; 2],
+}
+
+impl TryFrom<&ProtectedVmPtdevMmioRange> for KvmProtectedVmPtdevMmioRange {
+    type Error = Error;
+
+    fn try_from(range: &ProtectedVmPtdevMmioRange) -> Result<Self> {
+        Ok(Self {
+            segment: range.segment,
+            bdf: range.bdf,
+            pasid: range.pasid,
+            bar_index: range.bar_index,
+            reserved8: [0; 3],
+            bar_offset: range.bar_offset,
+            guest_gpa: range.guest_gpa,
+            size: range.size,
+            kind: range.kind,
+            flags: range.flags,
+            reserved: [0; 2],
+        })
+    }
+}
+
+#[repr(C)]
+struct KvmProtectedVmPtdevMmioMetadata {
+    nr_ranges: u32,
+    generation: u16,
+    reserved16: u16,
+    flags: u64,
+    ranges: u64,
+    reserved: [u64; 4],
 }
 
 impl VmX86_64 for KvmVm {
@@ -512,6 +600,13 @@ impl VmX86_64 for KvmVm {
             }
             self.set_protected_vm_firmware_gpa(fw_addr)
         }
+    }
+
+    fn set_protected_vm_ptdev_mmio_metadata(
+        &self,
+        metadata: &ProtectedVmPtdevMmioMetadata,
+    ) -> Result<()> {
+        KvmVm::set_protected_vm_ptdev_mmio_metadata(self, metadata)
     }
 
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuX86_64>> {
