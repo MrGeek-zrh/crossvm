@@ -225,7 +225,7 @@ impl KvmVm {
 
     /// Whether running under pKVM.
     pub fn is_pkvm(&self) -> bool {
-        false
+        self.get_protected_vm_info().is_ok()
     }
 
     /// Checks if a particular `VmCap` is available, or returns None if arch-independent

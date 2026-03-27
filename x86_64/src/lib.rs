@@ -1042,6 +1042,7 @@ impl arch::LinuxArch for X8664arch {
             .collect();
 
         let use_pcie_cfg_mmio = !components.hv_cfg.protection_type.isolates_memory();
+        let use_pcie_vcfg_mmio = !components.hv_cfg.protection_type.isolates_memory();
 
         let (pci, pci_irqs, mut pid_debug_label_map, amls, gpe_scope_amls) =
             arch::generate_pci_root(
@@ -1054,7 +1055,7 @@ impl arch::LinuxArch for X8664arch {
                 system_allocator,
                 &mut vm,
                 4, // Share the four pin interrupts (INTx#)
-                Some(pcie_vcfg_range.start),
+                use_pcie_vcfg_mmio.then_some(pcie_vcfg_range.start),
                 #[cfg(feature = "swap")]
                 swap_controller,
             )
@@ -1080,14 +1081,16 @@ impl arch::LinuxArch for X8664arch {
                 .unwrap();
         }
 
-        let pcie_vcfg_mmio = Arc::new(Mutex::new(PciVirtualConfigMmio::new(pci.clone(), 13)));
-        mmio_bus
-            .insert(
-                pcie_vcfg_mmio,
-                pcie_vcfg_range.start,
-                pcie_vcfg_range.len().unwrap(),
-            )
-            .unwrap();
+        if use_pcie_vcfg_mmio {
+            let pcie_vcfg_mmio = Arc::new(Mutex::new(PciVirtualConfigMmio::new(pci.clone(), 13)));
+            mmio_bus
+                .insert(
+                    pcie_vcfg_mmio,
+                    pcie_vcfg_range.start,
+                    pcie_vcfg_range.len().unwrap(),
+                )
+                .unwrap();
+        }
 
         let (virtio_mmio_devices, _others): (Vec<_>, Vec<_>) = devs
             .into_iter()
@@ -1212,6 +1215,7 @@ impl arch::LinuxArch for X8664arch {
             swap_controller,
             #[cfg(any(target_os = "android", target_os = "linux"))]
             components.ac_adapter,
+            use_pcie_vcfg_mmio,
             guest_suspended_cvar,
             &pci_irqs,
         )?;
@@ -2125,6 +2129,7 @@ impl X8664arch {
         resume_notify_devices: &mut Vec<Arc<Mutex<dyn BusResumeDevice>>>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
         #[cfg(any(target_os = "android", target_os = "linux"))] ac_adapter: bool,
+        expose_pcie_vcfg: bool,
         guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
         pci_irqs: &[(PciAddress, u32, PciInterruptPin)],
     ) -> Result<(acpi::AcpiDevResource, Option<BatControl>)> {
@@ -2174,11 +2179,13 @@ impl X8664arch {
             None => 0x600,
         };
 
-        let pcie_vcfg = aml::Name::new(
-            "VCFG".into(),
-            &Self::get_pcie_vcfg_mmio_range(mem, &arch_memory_layout.pcie_cfg_mmio).start,
-        );
-        pcie_vcfg.to_aml_bytes(&mut amls);
+        if expose_pcie_vcfg {
+            let pcie_vcfg = aml::Name::new(
+                "VCFG".into(),
+                &Self::get_pcie_vcfg_mmio_range(mem, &arch_memory_layout.pcie_cfg_mmio).start,
+            );
+            pcie_vcfg.to_aml_bytes(&mut amls);
+        }
 
         let pm_sci_evt = devices::IrqLevelEvent::new().map_err(Error::CreateEvent)?;
 
