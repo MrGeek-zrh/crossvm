@@ -29,13 +29,13 @@ use base::RawDescriptor;
 use base::Tube;
 use base::WaitContext;
 use base::WorkerThread;
+use hypervisor::MemCacheType;
 use hypervisor::ProtectedVmPtdevMmioMetadata;
 use hypervisor::ProtectedVmPtdevMmioRange;
-use hypervisor::PROTECTED_VM_PTDEV_MMIO_KIND_DIRECT_BAR;
-use hypervisor::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
 #[cfg(target_arch = "x86_64")]
 use hypervisor::VmX86_64;
-use hypervisor::MemCacheType;
+use hypervisor::PROTECTED_VM_PTDEV_MMIO_KIND_DIRECT_BAR;
+use hypervisor::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
 use resources::AddressRange;
 use resources::Alloc;
 use resources::AllocOptions;
@@ -1223,11 +1223,12 @@ impl VfioPciDevice {
 
         for mmio_info in &self.mmio_regions {
             let bar_index = mmio_info.bar_index();
+            let bar_addr = mmio_info.address();
+
             if bar_index >= VFIO_PCI_ROM_REGION_INDEX as usize {
                 continue;
             }
 
-            let bar_addr = mmio_info.address();
             if bar_addr == 0 {
                 continue;
             }

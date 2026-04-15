@@ -55,19 +55,19 @@ use crate::PicSelect;
 use crate::PicState;
 use crate::PitChannelState;
 use crate::PitState;
+use crate::ProtectedVmPtdevMmioMetadata;
+use crate::ProtectedVmPtdevMmioRange;
 use crate::ProtectionType;
-use crate::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
 use crate::Regs;
 use crate::Segment;
 use crate::Sregs;
-use crate::ProtectedVmPtdevMmioMetadata;
-use crate::ProtectedVmPtdevMmioRange;
 use crate::VcpuExit;
 use crate::VcpuX86_64;
 use crate::VmCap;
 use crate::VmX86_64;
 use crate::Xsave;
 use crate::NUM_IOAPIC_PINS;
+use crate::PROTECTED_VM_PTDEV_MMIO_MAX_RANGES;
 
 type KvmCpuId = FlexibleArrayWrapper<kvm_cpuid2, kvm_cpuid_entry2>;
 const KVM_XSAVE_MAX_SIZE: usize = 4096;
@@ -502,6 +502,19 @@ impl KvmVm {
             return Err(Error::new(E2BIG));
         }
 
+        let segment = metadata.ranges[0].segment;
+        let bdf = metadata.ranges[0].bdf;
+        let pasid = metadata.ranges[0].pasid;
+        let flags = u32::try_from(metadata.flags).map_err(|_| Error::new(EINVAL))?;
+
+        if metadata
+            .ranges
+            .iter()
+            .any(|range| range.segment != segment || range.bdf != bdf || range.pasid != pasid)
+        {
+            return Err(Error::new(EINVAL));
+        }
+
         let kvm_ranges = metadata
             .ranges
             .iter()
@@ -509,10 +522,12 @@ impl KvmVm {
             .collect::<Result<Vec<_>>>()?;
 
         let kvm_metadata = KvmProtectedVmPtdevMmioMetadata {
-            nr_ranges: kvm_ranges.len() as u32,
+            segment,
+            bdf,
+            pasid,
+            nr_ranges: kvm_ranges.len() as u16,
             generation: metadata.generation,
-            reserved16: 0,
-            flags: metadata.flags,
+            flags,
             ranges: kvm_ranges.as_ptr() as u64,
             reserved: [0; 4],
         };
@@ -524,7 +539,12 @@ impl KvmVm {
             self.enable_raw_capability(
                 KvmCap::X86ProtectedVm,
                 KVM_CAP_X86_PROTECTED_VM_FLAGS_SET_PTDEV_MMIO_METADATA,
-                &[&kvm_metadata as *const KvmProtectedVmPtdevMmioMetadata as u64, 0, 0, 0],
+                &[
+                    &kvm_metadata as *const KvmProtectedVmPtdevMmioMetadata as u64,
+                    0,
+                    0,
+                    0,
+                ],
             )
         }
     }
@@ -538,45 +558,44 @@ struct KvmProtectedVmInfo {
 
 #[repr(C)]
 struct KvmProtectedVmPtdevMmioRange {
-    segment: u16,
-    bdf: u16,
-    pasid: u32,
-    bar_index: u8,
-    reserved8: [u8; 3],
-    bar_offset: u64,
     guest_gpa: u64,
     size: u64,
-    kind: u32,
-    flags: u32,
-    reserved: [u64; 2],
+    bar_offset: u64,
+    bar_index: u8,
+    kind: u8,
+    reserved16: u16,
+    reserved32: u32,
 }
 
 impl TryFrom<&ProtectedVmPtdevMmioRange> for KvmProtectedVmPtdevMmioRange {
     type Error = Error;
 
     fn try_from(range: &ProtectedVmPtdevMmioRange) -> Result<Self> {
+        let kind = u8::try_from(range.kind).map_err(|_| Error::new(EINVAL))?;
+        if range.flags != 0 {
+            return Err(Error::new(EINVAL));
+        }
+
         Ok(Self {
-            segment: range.segment,
-            bdf: range.bdf,
-            pasid: range.pasid,
-            bar_index: range.bar_index,
-            reserved8: [0; 3],
-            bar_offset: range.bar_offset,
             guest_gpa: range.guest_gpa,
             size: range.size,
-            kind: range.kind,
-            flags: range.flags,
-            reserved: [0; 2],
+            bar_offset: range.bar_offset,
+            bar_index: range.bar_index,
+            kind,
+            reserved16: 0,
+            reserved32: 0,
         })
     }
 }
 
 #[repr(C)]
 struct KvmProtectedVmPtdevMmioMetadata {
-    nr_ranges: u32,
+    segment: u16,
+    bdf: u16,
+    pasid: u32,
+    nr_ranges: u16,
     generation: u16,
-    reserved16: u16,
-    flags: u64,
+    flags: u32,
     ranges: u64,
     reserved: [u64; 4],
 }

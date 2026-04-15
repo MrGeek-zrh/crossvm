@@ -15,16 +15,16 @@ use base::warn;
 use base::MemoryMapping;
 use base::RawDescriptor;
 use base::SharedMemory;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::ProtectedVmPtdevMmioMetadata;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::VmX86_64;
 use remain::sorted;
 use resources::Error as SystemAllocatorFaliure;
 use resources::SystemAllocator;
 use snapshot::AnySnapshot;
 use sync::Mutex;
 use thiserror::Error;
-#[cfg(target_arch = "x86_64")]
-use hypervisor::ProtectedVmPtdevMmioMetadata;
-#[cfg(target_arch = "x86_64")]
-use hypervisor::VmX86_64;
 use vm_control::api::VmMemoryClient;
 
 use super::PciId;

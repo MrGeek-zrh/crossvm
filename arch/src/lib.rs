@@ -758,6 +758,22 @@ pub enum DeviceRegistrationError {
     SubmitProtectedVmPtdevMmioMetadata(base::Error),
 }
 
+#[cfg(target_arch = "x86_64")]
+fn submit_protected_vm_ptdev_mmio_metadata(
+    device: &dyn PciDevice,
+    vm: &impl VmArch,
+) -> Result<(), DeviceRegistrationError> {
+    if let Some(metadata) = device
+        .get_protected_vm_ptdev_mmio_metadata(vm)
+        .map_err(DeviceRegistrationError::RegisterProtectedVmPtdevMmioMetadata)?
+    {
+        vm.set_protected_vm_ptdev_mmio_metadata(&metadata)
+            .map_err(DeviceRegistrationError::SubmitProtectedVmPtdevMmioMetadata)?;
+    }
+
+    Ok(())
+}
+
 /// Config a PCI device for used by this vm.
 pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
@@ -783,15 +799,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
         .map_err(DeviceRegistrationError::AllocateDeviceAddrs)?;
 
     #[cfg(target_arch = "x86_64")]
-    if let Some(metadata) = device
-        .get_protected_vm_ptdev_mmio_metadata(&linux.vm)
-        .map_err(DeviceRegistrationError::RegisterProtectedVmPtdevMmioMetadata)?
-    {
-        linux
-            .vm
-            .set_protected_vm_ptdev_mmio_metadata(&metadata)
-            .map_err(DeviceRegistrationError::SubmitProtectedVmPtdevMmioMetadata)?;
-    }
+    submit_protected_vm_ptdev_mmio_metadata(device.as_ref(), &linux.vm)?;
 
     // If device is a pcie bridge, add its pci bus to pci root
     if let Some(pci_bus) = device.get_new_pci_bus() {
@@ -1084,7 +1092,7 @@ pub fn generate_pci_root(
     mmio_register_bit_num: usize,
     io_bus: Arc<Bus>,
     resources: &mut SystemAllocator,
-    vm: &mut impl Vm,
+    vm: &mut impl VmArch,
     max_irqs: usize,
     vcfg_base: Option<u64>,
     #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
@@ -1243,6 +1251,8 @@ pub fn generate_pci_root(
 
         let ranges = io_ranges.remove(&dev_idx).unwrap_or_default();
         let device_ranges = device_ranges.remove(&dev_idx).unwrap_or_default();
+        #[cfg(target_arch = "x86_64")]
+        submit_protected_vm_ptdev_mmio_metadata(device.as_ref(), &*vm)?;
         device
             .register_device_capabilities()
             .map_err(DeviceRegistrationError::RegisterDeviceCapabilities)?;
